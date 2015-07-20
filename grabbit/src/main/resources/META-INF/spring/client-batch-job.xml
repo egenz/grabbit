@@ -34,13 +34,21 @@
     <import resource="client-batch-job-context.xml"/>
     <import resource="client-jcrNodes-step.xml" />
     <import resource="client-preprocessor-step.xml" />
+    <import resource="client-deleteBeforeWrite-steps.xml" />
 
     <batch:job id="clientJob" xmlns="http://www.springframework.org/schema/batch" job-repository="clientJobRepository">
         <batch:step id="clientPreprocessor" next="clientWorkflowOff">
             <batch:tasklet ref="clientPreprocessTasklet" transaction-manager="clientTransactionManager"/>
         </batch:step>
-        <batch:step id="clientWorkflowOff" next="clientJcrNodes">
+        <batch:step id="clientWorkflowOff" next="deleteBeforeWriteDecision">
             <batch:tasklet ref="clientWorkflowOffTasklet" transaction-manager="clientTransactionManager"/>
+        </batch:step>
+        <batch:decision id="deleteBeforeWriteDecision" decider="deleteBeforeWriteDecider">
+            <next on="NO" to="clientJcrNodes" />
+            <next on="YES" to="deleteBeforeWrite" />
+        </batch:decision>
+        <batch:step id="deleteBeforeWrite" next="clientJcrNodes">
+            <batch:tasklet ref="deleteBeforeWriteTasklet" transaction-manager="clientTransactionManager"/>
         </batch:step>
         <batch:step id="clientJcrNodes" next="clientWorkflowOn">
             <batch:tasklet transaction-manager="clientTransactionManager">
