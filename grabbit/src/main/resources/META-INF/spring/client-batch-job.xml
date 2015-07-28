@@ -37,19 +37,28 @@
     <import resource="client-deleteBeforeWrite-steps.xml" />
 
     <batch:job id="clientJob" xmlns="http://www.springframework.org/schema/batch" job-repository="clientJobRepository">
-        <batch:step id="clientPreprocessor" next="clientWorkflowOff">
+        <!--  Do any presync tasks concurrently that we can, e.g turning off workflows -->
+        <batch:split id="presyncflow" task-executor="asyncTaskExecutor" next="clientPreprocessor">
+            <batch:flow>
+                <batch:step id="clientWorkflowOff">
+                    <batch:tasklet ref="clientWorkflowOffTasklet" transaction-manager="clientTransactionManager"/>
+                </batch:step>
+            </batch:flow>
+            <batch:flow>
+                <batch:decision id="deleteBeforeWriteDecision" decider="deleteBeforeWriteDecider">
+                    <end on="NO"/>
+                    <next on="YES" to="deleteBeforeWrite" />
+                </batch:decision>
+                <batch:step id="deleteBeforeWrite">
+                    <batch:tasklet ref="deleteBeforeWriteTasklet" transaction-manager="clientTransactionManager"/>
+                </batch:step>
+            </batch:flow>
+        </batch:split>
+
+        <batch:step id="clientPreprocessor" next="clientJcrNodes">
             <batch:tasklet ref="clientPreprocessTasklet" transaction-manager="clientTransactionManager"/>
         </batch:step>
-        <batch:step id="clientWorkflowOff" next="deleteBeforeWriteDecision">
-            <batch:tasklet ref="clientWorkflowOffTasklet" transaction-manager="clientTransactionManager"/>
-        </batch:step>
-        <batch:decision id="deleteBeforeWriteDecision" decider="deleteBeforeWriteDecider">
-            <next on="NO" to="clientJcrNodes" />
-            <next on="YES" to="deleteBeforeWrite" />
-        </batch:decision>
-        <batch:step id="deleteBeforeWrite" next="clientJcrNodes">
-            <batch:tasklet ref="deleteBeforeWriteTasklet" transaction-manager="clientTransactionManager"/>
-        </batch:step>
+
         <batch:step id="clientJcrNodes" next="clientWorkflowOn">
             <batch:tasklet transaction-manager="clientTransactionManager">
                 <batch:chunk reader="clientProtobufNodesReader" writer="clientJcrNodesWriter"
@@ -59,9 +68,11 @@
                 </listeners>
             </batch:tasklet>
         </batch:step>
+
         <batch:step id="clientWorkflowOn">
             <batch:tasklet ref="clientWorkflowOnTasklet" transaction-manager="clientTransactionManager"/>
         </batch:step>
+
         <batch:listeners>
             <listener ref="clientBatchJobListener"/>
         </batch:listeners>
