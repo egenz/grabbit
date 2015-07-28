@@ -32,13 +32,14 @@
     -->
 
     <import resource="client-batch-job-context.xml"/>
+
+    <import resource="client-namespace-step.xml" />
     <import resource="client-jcrNodes-step.xml" />
-    <import resource="client-preprocessor-step.xml" />
     <import resource="client-deleteBeforeWrite-steps.xml" />
 
     <batch:job id="clientJob" xmlns="http://www.springframework.org/schema/batch" job-repository="clientJobRepository">
         <!--  Do any presync tasks concurrently that we can, e.g turning off workflows -->
-        <batch:split id="presyncflow" task-executor="asyncTaskExecutor" next="clientPreprocessor">
+        <batch:split id="preSyncFlow" task-executor="asyncTaskExecutor" next="clientNamespaceSync">
             <batch:flow>
                 <batch:step id="clientWorkflowOff">
                     <batch:tasklet ref="clientWorkflowOffTasklet" transaction-manager="clientTransactionManager"/>
@@ -55,8 +56,9 @@
             </batch:flow>
         </batch:split>
 
-        <batch:step id="clientPreprocessor" next="clientJcrNodes">
-            <batch:tasklet ref="clientPreprocessTasklet" transaction-manager="clientTransactionManager"/>
+        <!-- Writes JCR namespaces streamed from the server-->
+        <batch:step id="clientNamespaceSync" next="clientJcrNodes">
+            <batch:tasklet ref="clientNamespaceSyncTasklet" transaction-manager="clientTransactionManager"/>
         </batch:step>
 
         <batch:step id="clientJcrNodes" next="clientWorkflowOn">
