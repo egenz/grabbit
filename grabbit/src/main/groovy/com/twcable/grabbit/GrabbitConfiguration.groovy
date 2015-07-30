@@ -121,7 +121,7 @@ class GrabbitConfiguration {
 
     private static boolean boolVal(Map<String, String> configMap, String key) {
         if (!configMap.containsKey(key)) {
-            log.warn "Input doesn't contain ${key} for a boolean value. Will default to false"
+            log.debug "Input doesn't contain ${key} for a boolean value. Will default to false"
         }
         def boolVal = configMap.get(key) as boolean
         return boolVal
