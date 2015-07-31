@@ -9,7 +9,10 @@ import org.springframework.batch.core.scope.context.ChunkContext
 import org.springframework.batch.core.step.tasklet.Tasklet
 import org.springframework.batch.repeat.RepeatStatus
 
+import javax.annotation.Nonnull
+import javax.annotation.Nullable
 import javax.jcr.Node
+import javax.jcr.PathNotFoundException
 import javax.jcr.Session
 
 /*
@@ -28,39 +31,75 @@ import javax.jcr.Session
  * limitations under the License.
  */
 
+/**
+ * A client preSyncFlow tasklet that deletes nodes under the job path
+ * <p>
+ *     This tasklet is used to clear the workspace that will be written to by the job path.
+ *     If exclude paths are provided, it does not delete those paths, rather it deletes the nodes
+ *     around the exclude paths.  If no exclude paths are provided, the entire tree under the
+ *     job path is deleted.
+ *
+ *     This tasklet is activated by the "deleteBeforeWrite" path configuration
+ * </p>
+ */
 @Slf4j
 @CompileStatic
 class DeleteBeforeWriteTasklet implements Tasklet {
 
     private String jobPath
 
-    private Collection<String> excludePaths
+    private Collection<String> relativeExcludePaths
 
     private SlingRepository slingRepository
 
-    void setExcludePaths(String paths) {
+
+    /**
+     * @param jobPath the job path to evaluate.  Comes from the job parameters
+     * @param slingRepository comes from bean defined in client-osgi-config.xml
+     * @param excludePaths a '*' delimited string containing the paths to exclude.  Comes from the job parameters
+     */
+    DeleteBeforeWriteTasklet(@Nonnull final String jobPath, @Nonnull final SlingRepository slingRepository, @Nullable String excludePaths) {
+        this.slingRepository = slingRepository
+        //Ensures the job path leads with a '/'
+        this.jobPath = cleanJobPath(jobPath)
+        //Takes the * delimited paths string, creates a collection of relative paths, and normalizes
+        this.relativeExcludePaths = createExcludePaths(this.jobPath, excludePaths)
+    }
+
+
+    /**
+     * @param paths '*' delimited, expected to be driven from job parameters e.g /foo/bar/blah{@literal *}/foo/bar/meh
+     * @param jobPath the job path, used to make sure we are building well-formed relative paths e.g /foo/bar
+     * @return A collection of the exclude paths that are guaranteed to lead with a '/', e.g [blah, meh].  If null or empty, returns an empty collection
+     * @throws IllegalStateException if any paths are not well-formed to the jobPath
+     */
+    private static Collection<String> createExcludePaths(@Nonnull final String jobPath, @Nullable String paths) {
         final thisPathsString = paths?.trim()
         if(!thisPathsString) {
-            excludePaths = []
-            return
+            return []
         }
-        Collection<String> theseExcludePaths = thisPathsString.split("\\*") as Collection
-        excludePaths = theseExcludePaths.collect { String excludePath ->
-            return (excludePath[0] != '/') ? "/${excludePath}".toString() : excludePath
-        }
+        final theExcludePaths = thisPathsString.split("\\*") as Collection<String>
+        final jobPathWithSlash = jobPath + '/'
+
+        if (theExcludePaths.any {!it.startsWith(jobPathWithSlash)}) throw new IllegalStateException("Not all exclude paths start with \"${jobPath}\": ${theExcludePaths}")
+
+        return theExcludePaths.collect { it.substring(jobPathWithSlash.length()) }
     }
 
-
-    void setJobPath(String jobPath) {
+    /**
+     * @param jobPath expected to be driven from job parameters
+     * @return a "cleaned" job path, i.e leads with a '/', no trailing '/', and trimmed, e.g "/foo/bar"
+     */
+    private static String cleanJobPath(String jobPath) {
         String thisJobPath = jobPath.trim()
-        thisJobPath = thisJobPath[0] != '/' ? "/${thisJobPath}" : thisJobPath
-        this.jobPath = thisJobPath
+        //Add the leading '/' if not present
+        thisJobPath = (thisJobPath[0] != '/') ? "/${thisJobPath}" : thisJobPath
+        //Remove any trailing '/'
+        thisJobPath = (thisJobPath[-1] != '/') ? thisJobPath : thisJobPath[0..-2] as String
+
+        return thisJobPath
     }
 
-
-    void setSlingRepository(SlingRepository slingRepository) {
-        this.slingRepository = slingRepository
-    }
 
     /**
      * Given the current context in the form of a step contribution, do whatever
@@ -78,27 +117,33 @@ class DeleteBeforeWriteTasklet implements Tasklet {
     @Override
     RepeatStatus execute(StepContribution contribution, ChunkContext chunkContext) throws Exception {
         final Session session = JcrUtil.getSession(slingRepository, "admin")
+
+        final Node rootNode
+        try {
+            rootNode = session.getNode(jobPath)
+        }
+        catch(PathNotFoundException ex) {
+            log.warn "deleteBeforeWrite was enabled for jobPath ${jobPath} but job path does not exist on client!"
+            return RepeatStatus.FINISHED
+        }
+
         //If we don't have any exclude paths, we don't have to worry about only clearing particular subtrees
-        if(!excludePaths || excludePaths.empty) {
-            final Node node = session.getNode(jobPath)
-            node.remove()
+        if(!relativeExcludePaths || relativeExcludePaths.empty) {
+            rootNode.remove()
         }
         else {
-            deletePartialTree(session)
+            deletePartialTree(rootNode, relativeExcludePaths)
         }
+
         session.save()
         return RepeatStatus.FINISHED
     }
 
 
-    private void deletePartialTree(final Session session) {
-        final relativeExcludePaths = excludePaths.collect { it - jobPath }
-        final relativeRoot = session.getNode(jobPath)
-        deletePartialTree(relativeRoot, relativeExcludePaths)
-    }
-
-
-    private void deletePartialTree(Node rootNode, Collection<String> relativeExcludePaths) {
+    /**
+     * Called recursively deleting any nodes under rootNode, that aren't apart of any relativeExcludePaths
+     */
+    private void deletePartialTree(@Nonnull final Node rootNode, @Nullable Collection<String> relativeExcludePaths) {
         //Base case.  If a root node does not have any exclude paths under it, it must have been excluded
         if(!relativeExcludePaths) {
             return
@@ -106,7 +151,7 @@ class DeleteBeforeWriteTasklet implements Tasklet {
         //Compute the current tree level excluded nodes, and compute the remaining paths to traverse
         Collection<NodeAndExcludePaths> nodeAndExcludePaths = relativeExcludePaths.inject([] as Collection<NodeAndExcludePaths>) { def acc, def thisPath ->
             final thisNodeAndExcludePath = NodeAndExcludePaths.fromPath(thisPath)
-            //If we have already created a nodeAndExcludePath for this node name, just add to it's exclude paths
+            //If we have already created a nodeAndExcludePath for this node name, just add to its exclude paths
             final matchingNodeName = acc.find { it.nodeName == thisNodeAndExcludePath.nodeName }
             if(matchingNodeName) {
                 matchingNodeName.excludePaths.addAll(thisNodeAndExcludePath.excludePaths)
@@ -127,30 +172,41 @@ class DeleteBeforeWriteTasklet implements Tasklet {
         }
         //Recurse on each
         nodeAndExcludePaths.each {
-            deletePartialTree(rootNode.getNode(it.nodeName), it.excludePaths)
+            try {
+                deletePartialTree(rootNode.getNode(it.nodeName), it.excludePaths)
+            }
+            catch(PathNotFoundException ex) {
+                log.warn "Exclude node ${it.nodeName} of parent ${rootNode.path} does not exist on client, so we won't traverse it for adjacent node deletion"
+            }
         }
     }
 
     /**
      * If we have a path for a node such as 'foo/bar/doo'
-     * node is 'foo', and the excludePaths is '/bar/doo'
+     * then node is 'foo', and the relativeExcludePaths is 'bar/doo'.  As other relativeExcludePaths are inspected, we may find that
+     * there are NodeAndExcludePaths with the same nodeName, in which case they will be merged by adding to an instance's excludePaths
      */
     static class NodeAndExcludePaths {
 
         String nodeName
+
+        //Can mutate in the case described above
         Collection<String> excludePaths
 
+        /**
+         * @param path Expects a relative path e.g 'foo/bar/doo'
+         * @return NodeExcludePath(nodeName: "foo", excludePaths: "bar/doo")
+         */
         static NodeAndExcludePaths fromPath(final String path) {
-            //Remove leading '/'
-            final String thisPath = path.replaceFirst('/', '')
+            final String thisPath = path
             //We need to find the current node, and the remaining path e.g 'foo/bar/doo', node: foo, remaining path: /bar/doo
             final slashIndex = thisPath.indexOf('/')
             //There is no remaining path
             if(slashIndex == -1) {
                 return new NodeAndExcludePaths(nodeName: thisPath, excludePaths: [])
             }
-            final remainingPath = thisPath.substring(slashIndex)
-            final node = thisPath - remainingPath
+            final remainingPath = thisPath.substring(slashIndex+1)
+            final node = thisPath.substring(0, slashIndex)
             return new NodeAndExcludePaths(nodeName: node, excludePaths: [remainingPath])
         }
     }

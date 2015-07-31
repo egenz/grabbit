@@ -24,6 +24,10 @@ import org.springframework.batch.core.job.flow.JobExecutionDecider
  * limitations under the License.
  */
 
+/**
+ * This class decides whether to execute the @see{@link DeleteBeforeWriteTasklet} based on the
+ * deleteBeforeWrite parameter in the job parameters
+ */
 @CompileStatic
 @Slf4j
 class DeleteBeforeWriteDecider implements JobExecutionDecider {

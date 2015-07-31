@@ -34,26 +34,24 @@ class DeleteBeforeWriteTaskletSpec extends Specification {
 
     def "Exclude paths bean is set correctly"() {
         when:
-        final deleteBeforeWriteTasklet = new DeleteBeforeWriteTasklet()
-        deleteBeforeWriteTasklet.setExcludePaths(excludePaths)
+        final deleteBeforeWriteTasklet = new DeleteBeforeWriteTasklet("/foo/bar", Mock(SlingRepository), excludePaths)
 
         then:
-        expectedExcludePaths == deleteBeforeWriteTasklet.excludePaths
+        relativeExpectedExcludePaths == deleteBeforeWriteTasklet.relativeExcludePaths
 
+        //Excluded paths are expected to be absolute from job configuration, but transformed to relative paths
         where:
-        excludePaths        |   expectedExcludePaths
-        null                |   []
-        "foopath"           |   ["/foopath"]
-        "/foopath "         |   ["/foopath"]
-        "/foo/bar*/foo/doo" |   ["/foo/bar", "/foo/doo"]
-        "foo/bar*foo/doo"   |   ["/foo/bar", "/foo/doo"]
+        excludePaths                          |   relativeExpectedExcludePaths
+        null                                  |   []
+        "/foo/bar/foopath"                    |   ["foopath"]
+        "/foo/bar/foopath "                   |   ["foopath"]
+        "/foo/bar/foo/bar*/foo/bar/foo/doo"   |   ["foo/bar", "foo/doo"]
     }
 
 
     def "Job path bean is set correctly"() {
         when:
-        final deleteBeforeWriteTasklet = new DeleteBeforeWriteTasklet()
-        deleteBeforeWriteTasklet.setJobPath(jobPath)
+        final deleteBeforeWriteTasklet = new DeleteBeforeWriteTasklet(jobPath, Mock(SlingRepository), null)
 
         then:
         expectedJobPath == deleteBeforeWriteTasklet.jobPath
@@ -62,6 +60,7 @@ class DeleteBeforeWriteTaskletSpec extends Specification {
         jobPath         |   expectedJobPath
         "foo/bar"       |   "/foo/bar"
         "/foo/bar "     |   "/foo/bar"
+        "/foo/bar/"     |   "/foo/bar"
     }
 
     def "If no exclude paths, the entire path is deleted"() {
@@ -80,9 +79,7 @@ class DeleteBeforeWriteTaskletSpec extends Specification {
             loginAdministrative(null) >> session
         }
 
-        final deleteBeforeWriteTasklet = new DeleteBeforeWriteTasklet()
-        deleteBeforeWriteTasklet.setSlingRepository(slingRepository)
-        deleteBeforeWriteTasklet.setJobPath(jobPath)
+        final deleteBeforeWriteTasklet = new DeleteBeforeWriteTasklet(jobPath, slingRepository, null)
 
         then:
         RepeatStatus.FINISHED == deleteBeforeWriteTasklet.execute(Mock(StepContribution), Mock(ChunkContext))
@@ -108,11 +105,8 @@ class DeleteBeforeWriteTaskletSpec extends Specification {
                 )
         ).build()
 
-        final deleteBeforeWriteTasklet = new DeleteBeforeWriteTasklet()
-        deleteBeforeWriteTasklet.setSlingRepository(repository)
         final excludePaths = ["/root/a/a/b", "/root/a/a/c", "/root/b"]
-        deleteBeforeWriteTasklet.setExcludePaths(excludePaths.join('*'))
-        deleteBeforeWriteTasklet.setJobPath("/root")
+        final deleteBeforeWriteTasklet = new DeleteBeforeWriteTasklet("/root", repository, excludePaths.join('*'))
 
         when:
         deleteBeforeWriteTasklet.execute(Mock(StepContribution), Mock(ChunkContext))
@@ -130,5 +124,42 @@ class DeleteBeforeWriteTaskletSpec extends Specification {
 
         then:
         excludedPathsNotDeleted
+    }
+
+
+    def "If job path is marked for deletion, but it doesn't exist on client, we fail gracefully"() {
+        given:
+        final emptyRepository = repository().build()
+        final deleteBeforeWriteTasklet = new DeleteBeforeWriteTasklet("/nonExistentRoot", emptyRepository, null)
+
+        when:
+        deleteBeforeWriteTasklet.execute(Mock(StepContribution), Mock(ChunkContext))
+
+        then:
+        notThrown(PathNotFoundException)
+    }
+
+
+    def "If a job path is marked for deletion, and an exclude path does not exist on the client, traversal for that path fails gracefully"() {
+        given:
+        final repository = repository(
+                node("root",
+                        node("a"),
+                        node("b",
+                                node("a"),
+                                node("b")
+                        ),
+                        node("c")
+                )
+        ).build()
+
+        final excludePaths = ["/root/a", "/root/b/c", "/root/d"]
+        final deleteBeforeWriteTasklet = new DeleteBeforeWriteTasklet("/root", repository, excludePaths.join('*'))
+
+        when:
+        deleteBeforeWriteTasklet.execute(Mock(StepContribution), Mock(ChunkContext))
+
+        then:
+        notThrown(PathNotFoundException)
     }
 }
