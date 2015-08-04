@@ -2,7 +2,7 @@
 <!DOCTYPE properties SYSTEM "http://java.sun.com/dtd/properties.dtd">
 <properties>
 <comment>FileVault Package Properties</comment>
-<entry key="name">${project.bundleName}</entry>
+<entry key="name">${project.packageName}</entry>
 <entry key="buildCount">1</entry>
 <entry key="version">${version}</entry>
 <entry key="dependencies"/>

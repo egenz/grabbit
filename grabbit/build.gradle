@@ -12,9 +12,11 @@ if (installTask != null) tasks.remove(installTask)
 
 apply plugin: 'cqpackage'
 
-ext.bundleName = 'Grabbit'
+ext.packageName = project.name
+ext.bundleName = project.name
 ext.bundleDescription = 'Grabbit'
 ext.symbolicName = "com.twcable.grabbit"
+jar.baseName = 'grabbit'
 
 createPackage.bundleInstallRoot = '/apps/grabbit/install'
 

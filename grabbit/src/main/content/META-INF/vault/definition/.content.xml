@@ -6,7 +6,7 @@
     builtWith="Adobe Experience Manager-6.1.0.20150507"
     fixedBugs=""
     group="twc"
-    name="${project.bundleName}"
+    name="${project.packageName}"
     providerLink="${project.providerLink}"
     providerName="${project.organization}"
     providerUrl="${project.providerUrl}"
